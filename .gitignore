@@ -1,0 +1,6 @@
+.venv/
+pyvenv.cfg
+*.docx
+Solomon benchmark/solomon-100/
+__pycache__/
+*.pyc
