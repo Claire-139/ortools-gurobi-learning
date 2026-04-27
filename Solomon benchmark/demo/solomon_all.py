@@ -1,3 +1,7 @@
+import os 
+import csv
+
+
 
 import math
 from ortools.constraint_solver import routing_enums_pb2
@@ -55,23 +59,70 @@ def plot_routes(routes, coordinates):
             ax.annotate('', xy=(x2, y2), xytext=(x1, y1), arrowprops=dict(arrowstyle='->', color=colors[vehichle_id]))
         
     plt.savefig('routes.png')
-    plt.show
+    plt.show()
+
+def nearest_neighbor(nodes, vehicle_capacity, distance_matrix):
+    unvisited = list(range(1, len(nodes)))
+    routes = []
+
+    while unvisited:
+        # 派一辆新车
+        current = 0 # 从仓库出发
+        load = 0 # 车是空的
+        route = [0] # 线路从0开始
+        current_time = 0 # 当前时间
+
+        while True:
+            best_node = None
+            best_dist = float('inf')
+            # 找最近的、装得下的客户
+            for node in unvisited:
+                travel_time = distance_matrix[current][node]
+                arrival = max(current_time + travel_time, nodes[node]['ready_time'])
+                if (nodes[node]['demand'] + load <= vehicle_capacity) and (arrival <= nodes[node]['due_time']):
+                    dist = distance_matrix[current][node]
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_node = node
+                        
+            # 去那个客户
+            if best_node is not None:
+                # 计算到达时间
+                travel_time = distance_matrix[current][best_node]
+                arrival = max(current_time + travel_time, nodes[best_node]['ready_time'])
+                current_time = arrival + nodes[best_node]['service_time'] # 离开时间
+
+                route.append(best_node)
+                unvisited.remove(best_node)
+                load += nodes[best_node]['demand']
+                current = best_node
+            # 找不到回仓库
+            else:
+                route.append(0)
+                break
+
+        
+        routes.append(route)
+    return routes
+
+# 距离矩阵
+def build_distance_matrix(nodes):
+    n = len(nodes)
+    matrix = []
+    for i in range(n):
+        row = []
+        for j in range(n):
+            # 计算节点ij之间距离
+            dist = math.sqrt((nodes[i]['x'] - nodes[j]['x']) ** 2 + (nodes[i]['y'] - nodes[j]['y']) ** 2)
+            row.append(dist)
+        matrix.append(row)
+    return matrix
 
 
 # 建模
-def solve_vrptw(nodes, vehicle_count, vehicle_capacity):
+def solve_vrptw(nodes, vehicle_count, vehicle_capacity, verbose=False):
     # 计算距离矩阵
-    def build_distance_matrix(nodes):
-        n = len(nodes)
-        matrix = []
-        for i in range(n):
-            row = []
-            for j in range(n):
-                # 计算节点ij之间距离
-                dist = math.sqrt((nodes[i]['x'] - nodes[j]['x']) ** 2 + (nodes[i]['y'] - nodes[j]['y']) ** 2)
-                row.append(dist)
-            matrix.append(row)
-        return matrix
+
     
     # 调用距离矩阵
     distance_matrix = build_distance_matrix(nodes)
@@ -154,7 +205,8 @@ def solve_vrptw(nodes, vehicle_count, vehicle_capacity):
                 route_time.append(arrival)
             route.append(0)
             route_demand = solution.Min(capacity_dimension.CumulVar(previous_index))
-            print(f"车辆{vehicle_id + 1}路径: {route}, 距离: {route_distance}, 需求：{route_demand}, 到达时间{route_time}")
+            if verbose:
+                print(f"车辆{vehicle_id + 1}路径: {route}, 距离: {route_distance}, 需求：{route_demand}, 到达时间{route_time}")
             total_distance += route_distance
             total_demand += route_demand
             all_routes.append(route)
@@ -162,23 +214,66 @@ def solve_vrptw(nodes, vehicle_count, vehicle_capacity):
         all_customers = []
         for route in all_routes:
             all_customers.extend([n for n in route if n != 0])
-        print(f'访问客户数：{len(all_customers)}')
-        print(f'是否全覆盖：{sorted(all_customers) == list(range(1, 101))}')
-        print(f"总距离: {total_distance}")
-        print(f"总需求: {total_demand}")
-        coordinates = [(node['x'], node['y']) for node in nodes]
-        plot_routes(all_routes, coordinates)
+        if verbose:
+            print(f'访问客户数：{len(all_customers)}')
+            print(f'是否全覆盖：{sorted(all_customers) == list(range(1, 101))}')
+            print(f"总距离: {total_distance}")
+            print(f"总需求: {total_demand}")
+            coordinates = [(node['x'], node['y']) for node in nodes]
+            plot_routes(all_routes, coordinates)
+        return all_routes, total_distance
     else:
         print("无可行解：约束条件无法同时满足")
-
-
-nodes, vehicle_count, vehicle_capacity = read_solomon(r'Solomon benchmark\solomon-100\In\c101.txt')
-solve_vrptw(nodes, vehicle_count, vehicle_capacity)
-
-# print(f'车辆数：{vehicle_count}, 载重：{vehicle_capacity}')
-# print(f'节点数：{len(nodes)}')
-# print(f'仓库：{nodes[0]}')
-# print(f'客户1: {nodes[1]}')
+        return [], 0
 
 
 
+# 批量测试
+instance_dir = r'Solomon benchmark\solomon-100\In'
+results = []
+
+for filename in sorted(os.listdir(instance_dir)):
+    if not filename.startswith('c1') or not filename.endswith('.txt'):
+        continue
+
+    filepath = os.path.join(instance_dir, filename)
+    instance_name = filename.replace('.txt', '').upper()
+
+    print(f'\n正在处理{instance_name}...')
+
+    # 读数据
+    nodes, vehicle_count, vehicle_capacity = read_solomon(filepath)
+    distance_matrix = build_distance_matrix(nodes)
+
+    # ortools求解
+    ortools_routes, ortools_distance = solve_vrptw(nodes, vehicle_count, vehicle_capacity)
+
+    # 最近邻求解
+    nn_routes = nearest_neighbor(nodes, vehicle_capacity, distance_matrix)
+    nn_distance = sum(
+        distance_matrix[route[i]][route[i + 1]]
+        for route in nn_routes
+        for i in range(len(route) - 1)
+    )
+
+
+    improvement = (nn_distance - ortools_distance) / nn_distance * 100
+
+    results.append({
+        'instance': instance_name,
+        'ortools_distance': round(ortools_distance, 2),
+        'nn_distance': round(nn_distance, 2),
+        'ortools_vehicles': len([r for r in ortools_routes if len(r) > 2]),
+        'nn_vehicles': len(nn_routes),
+        'improvement': round(improvement, 2)
+    })
+    print(f'{instance_name}: OR-Tools={ortools_distance}, NN={nn_distance:.2f}, 提升={improvement:.1f}%')
+
+
+# 保存csv
+with open('results.csv', 'w', newline='', encoding='utf-8') as f:
+    writer = csv.DictWriter(f, fieldnames=results[0].keys())
+    writer.writeheader()
+    writer.writerows(results)
+
+print('\n结果已保存到results.csv')

@@ -55,23 +55,62 @@ def plot_routes(routes, coordinates):
             ax.annotate('', xy=(x2, y2), xytext=(x1, y1), arrowprops=dict(arrowstyle='->', color=colors[vehichle_id]))
         
     plt.savefig('routes.png')
-    plt.show
+    plt.show()
+
+def nearest_neighbor(nodes, vehicle_capacity, distance_matrix):
+    unvisited = list(range(1, len(nodes)))
+    routes = []
+
+    while unvisited:
+        # 派一辆新车
+        current = 0 # 从仓库出发
+        load = 0 # 车是空的
+        route = [0] # 线路从0开始
+
+        while True:
+            best_node = None
+            best_dist = float('inf')
+            # 找最近的、装得下的客户
+            for node in unvisited:
+                if nodes[node]['demand'] + load <= vehicle_capacity:
+                    dist = distance_matrix[current][node]
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_node = node
+                        
+            # 去那个客户
+            if best_node is not None:
+                route.append(best_node)
+                unvisited.remove(best_node)
+                load += nodes[best_node]['demand']
+                current = best_node
+            # 找不到回仓库
+            else:
+                route.append(0)
+                break
+
+        
+        routes.append(route)
+    return routes
+
+# 距离矩阵
+def build_distance_matrix(nodes):
+    n = len(nodes)
+    matrix = []
+    for i in range(n):
+        row = []
+        for j in range(n):
+            # 计算节点ij之间距离
+            dist = math.sqrt((nodes[i]['x'] - nodes[j]['x']) ** 2 + (nodes[i]['y'] - nodes[j]['y']) ** 2)
+            row.append(dist)
+        matrix.append(row)
+    return matrix
 
 
 # 建模
 def solve_vrptw(nodes, vehicle_count, vehicle_capacity):
     # 计算距离矩阵
-    def build_distance_matrix(nodes):
-        n = len(nodes)
-        matrix = []
-        for i in range(n):
-            row = []
-            for j in range(n):
-                # 计算节点ij之间距离
-                dist = math.sqrt((nodes[i]['x'] - nodes[j]['x']) ** 2 + (nodes[i]['y'] - nodes[j]['y']) ** 2)
-                row.append(dist)
-            matrix.append(row)
-        return matrix
+
     
     # 调用距离矩阵
     distance_matrix = build_distance_matrix(nodes)
@@ -168,17 +207,30 @@ def solve_vrptw(nodes, vehicle_count, vehicle_capacity):
         print(f"总需求: {total_demand}")
         coordinates = [(node['x'], node['y']) for node in nodes]
         plot_routes(all_routes, coordinates)
+        return all_routes, total_distance
     else:
         print("无可行解：约束条件无法同时满足")
+        return [], 0
+
+
+
+
+
+
 
 
 nodes, vehicle_count, vehicle_capacity = read_solomon(r'Solomon benchmark\solomon-100\In\c101.txt')
-solve_vrptw(nodes, vehicle_count, vehicle_capacity)
+distance_matrix = build_distance_matrix(nodes)
 
-# print(f'车辆数：{vehicle_count}, 载重：{vehicle_capacity}')
-# print(f'节点数：{len(nodes)}')
-# print(f'仓库：{nodes[0]}')
-# print(f'客户1: {nodes[1]}')
+ortools_routes, ortools_distance = solve_vrptw(nodes, vehicle_count, vehicle_capacity)
+nn_routes = nearest_neighbor(nodes, vehicle_capacity, distance_matrix)
 
-
-
+nn_total_distance = 0
+for route in nn_routes:
+    for i in range(len(route) - 1):
+        nn_total_distance += distance_matrix[route[i]][route[i + 1]]
+    
+print(f'\n=== 对比结果 ===')
+print(f'OR-Tools总距离：{ortools_distance}')
+print(f'最近邻算法总距离: {nn_total_distance:.2f}')
+print(f'最近邻使用车辆数: {len(nn_routes)}')
